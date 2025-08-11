@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>bud’s bucket list</title>
+  <!-- Tailwind via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="color-scheme" content="light dark" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🪣</text></svg>">
+  <style>
+    /* subtle, minimal animations */
+    .fade-enter { opacity: 0; transform: translateY(4px); }
+    .fade-enter-active { opacity: 1; transform: translateY(0); transition: all 150ms ease-out; }
+    .pressable:active { transform: translateY(1px); }
+  </style>
+</head>
+<body class="min-h-screen bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 antialiased">
+  <div class="mx-auto max-w-2xl p-6">
+    <!-- Card -->
+    <div class="rounded-3xl shadow-sm shadow-black/5 ring-1 ring-zinc-200/70 dark:ring-white/10 bg-white/80 dark:bg-zinc-900/60 backdrop-blur">
+      <div class="p-6 sm:p-8">
+        <header class="flex items-center justify-between gap-4">
+          <h1 class="text-2xl sm:text-3xl font-semibold tracking-tight">bud’s bucket list</h1>
+          <div class="flex items-center gap-2">
+            <button id="copyLinkBtn" class="pressable inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm ring-1 ring-zinc-300 dark:ring-white/15 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition">
+              <span class="hidden sm:inline">Share link</span>
+              <span class="sm:hidden">Share</span>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v14"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- List meta / status -->
+        <div id="listInfo" class="mt-3 text-sm text-zinc-500"></div>
+
+        <!-- Input -->
+        <form id="addForm" class="mt-6 flex gap-3">
+          <input id="itemInput" type="text" placeholder="Add something you want to do…" class="flex-1 rounded-2xl px-4 py-3 ring-1 ring-zinc-300 dark:ring-white/15 bg-white dark:bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/50" autocomplete="off" />
+          <button class="pressable rounded-2xl px-5 py-3 bg-indigo-600 text-white hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-400">Add</button>
+        </form>
+
+        <!-- Items -->
+        <ul id="items" class="mt-6 space-y-2"></ul>
+
+        <!-- Footer actions -->
+        <div class="mt-6 flex flex-wrap items-center justify-between gap-3 text-sm">
+          <div id="counts" class="text-zinc-500"></div>
+          <div class="flex gap-2">
+            <button id="clearCompleted" class="pressable rounded-xl px-3 py-2 ring-1 ring-zinc-300 dark:ring-white/15 hover:bg-zinc-100 dark:hover:bg-zinc-800">Clear completed</button>
+            <button id="deleteList" class="pressable rounded-xl px-3 py-2 ring-1 ring-red-300 text-red-600 dark:ring-red-800/60 hover:bg-red-50 dark:hover:bg-red-950/40">Delete all</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tiny help -->
+    <p class="mt-4 text-xs text-zinc-500">Tip: Share this page’s URL. Anyone with the link can add/remove items in real time. Works on desktop & mobile.</p>
+  </div>
+
+  <!-- Firebase (Modular v10) -->
+  <script type="module">
+    // ======= Easy, serverless persistence via Firebase Firestore =======
+    // 1) Create a Firebase project at https://console.firebase.google.com
+    // 2) Enable Firestore (in "Test mode" is fine for small private lists; see rules below)
+    // 3) Fill in your web app config below
+    // 4) Host this single HTML file anywhere (GitHub Pages, Netlify, Cloudflare Pages, etc.)
+
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+    import { getFirestore, collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, getDocs, writeBatch } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+    // ---- Paste your Firebase web app config here ----
+    // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+    const firebaseConfig = {
+      apiKey: "AIzaSyDof4q48cb4lw7kvPPqG950gXeri7ZESx0",
+      authDomain: "buds-bucket-list.firebaseapp.com",
+      projectId: "buds-bucket-list",
+      storageBucket: "buds-bucket-list.firebasestorage.app",
+      messagingSenderId: "616552185160",
+      appId: "1:616552185160:web:94e1eba21f2dd83816477d",
+      measurementId: "G-32K66K01J6"
+    };
+
+    // If not configured yet, show a friendly notice and keep the UI usable (local-only)
+    const configMissing = Object.values(firebaseConfig).some(v => String(v || '').includes('YOUR_'));
+
+    // Generate or read list ID from URL. Example: ?list=abcd-1234
+    const params = new URLSearchParams(location.search);
+    let listId = params.get('list');
+    if (!listId) {
+      listId = crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+      params.set('list', listId);
+      const newUrl = `${location.pathname}?${params.toString()}`;
+      history.replaceState(null, '', newUrl);
+    }
+
+    const els = {
+      items: document.getElementById('items'),
+      input: document.getElementById('itemInput'),
+      form: document.getElementById('addForm'),
+      counts: document.getElementById('counts'),
+      info: document.getElementById('listInfo'),
+      copyBtn: document.getElementById('copyLinkBtn'),
+      clearCompleted: document.getElementById('clearCompleted'),
+      deleteList: document.getElementById('deleteList')
+    };
+
+    els.info.textContent = `List ID: ${listId}`;
+
+    els.copyBtn.addEventListener('click', async () => {
+      await navigator.clipboard.writeText(location.href);
+      els.copyBtn.classList.add('ring-indigo-400');
+      els.copyBtn.textContent = 'Link copied!';
+      setTimeout(() => { els.copyBtn.classList.remove('ring-indigo-400'); els.copyBtn.textContent = 'Share link'; }, 1200);
+    });
+
+    // Local fallback (if Firebase config missing)
+    const localKey = `buds-bucket-list:${listId}`;
+    const loadLocal = () => JSON.parse(localStorage.getItem(localKey) || '[]');
+    const saveLocal = (arr) => localStorage.setItem(localKey, JSON.stringify(arr));
+
+    // Render a single item
+    function renderItem(id, data) {
+      const li = document.createElement('li');
+      li.dataset.id = id;
+      li.className = 'fade-enter flex items-center gap-3 rounded-2xl px-3 py-2 ring-1 ring-zinc-200 dark:ring-white/10 bg-white/80 dark:bg-zinc-900/60';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!data.done;
+      checkbox.className = 'h-4 w-4 rounded border-zinc-300 text-indigo-600 focus:ring-indigo-500';
+
+      const text = document.createElement('span');
+      text.textContent = data.text;
+      text.className = 'flex-1 select-text ' + (data.done ? 'line-through text-zinc-400' : '');
+
+      const del = document.createElement('button');
+      del.title = 'Delete';
+      del.className = 'pressable rounded-xl px-2 py-1 text-zinc-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40';
+      del.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6v12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6"/><path d="M10 6V4a2 2 0 0 1 2-2 2 2 0 0 1 2 2v2"/></svg>';
+
+      li.appendChild(checkbox);
+      li.appendChild(text);
+      li.appendChild(del);
+
+      // animate in
+      requestAnimationFrame(() => li.classList.add('fade-enter-active'));
+
+      // interactions
+      checkbox.addEventListener('change', () => toggleItem(id, checkbox.checked));
+      del.addEventListener('click', () => removeItem(id));
+
+      return li;
+    }
+
+    function updateCounts(items) {
+      const total = items.length;
+      const completed = items.filter(i => i.done).length;
+      const remaining = total - completed;
+      els.counts.textContent = `${remaining} left • ${completed} done • ${total} total`;
+    }
+
+    // ---------- Firebase Mode ----------
+    if (!configMissing) {
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      const itemsCol = collection(db, 'lists', listId, 'items');
+
+      // live listener
+      onSnapshot(query(itemsCol, orderBy('createdAt', 'asc')), (snap) => {
+        const all = [];
+        els.items.innerHTML = '';
+        snap.forEach(docSnap => {
+          const data = docSnap.data();
+          all.push({ id: docSnap.id, text: data.text, done: !!data.done });
+          els.items.appendChild(renderItem(docSnap.id, data));
+        });
+        updateCounts(all);
+      });
+
+      // add
+      els.form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const text = els.input.value.trim();
+        if (!text) return;
+        els.input.value = '';
+        await addDoc(itemsCol, { text, done: false, createdAt: serverTimestamp() });
+      });
+
+      // toggle
+      async function toggleItem(id, done) {
+        await updateDoc(doc(itemsCol, id), { done });
+      }
+
+      // remove single
+      async function removeItem(id) {
+        await deleteDoc(doc(itemsCol, id));
+      }
+
+      // bulk actions
+      els.clearCompleted.addEventListener('click', async () => {
+        const qSnap = await getDocs(query(itemsCol));
+        const batch = writeBatch(db);
+        qSnap.forEach(d => { if (d.data().done) batch.delete(d.ref); });
+        await batch.commit();
+      });
+      els.deleteList.addEventListener('click', async () => {
+        if (!confirm('Delete ALL items in this list?')) return;
+        const qSnap = await getDocs(query(itemsCol));
+        const batch = writeBatch(db);
+        qSnap.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      });
+
+      // expose for handlers
+      window.toggleItem = toggleItem;
+      window.removeItem = removeItem;
+
+    } else {
+      // ---------- Local Fallback Mode (no Firebase configured) ----------
+      console.warn('Firebase config missing — running in local-only mode.');
+      els.info.textContent += ' • local-only (not shared)';
+
+      let items = loadLocal();
+
+      function redraw() {
+        els.items.innerHTML = '';
+        items.forEach(it => els.items.appendChild(renderItem(it.id, it)));
+        updateCounts(items);
+      }
+
+      // add
+      els.form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const text = els.input.value.trim();
+        if (!text) return;
+        els.input.value = '';
+        const it = { id: crypto.randomUUID(), text, done: false };
+        items.push(it);
+        saveLocal(items); redraw();
+      });
+
+      // toggle / remove
+      window.toggleItem = (id, done) => {
+        items = items.map(it => it.id === id ? { ...it, done } : it); saveLocal(items); redraw();
+      };
+      window.removeItem = (id) => {
+        items = items.filter(it => it.id !== id); saveLocal(items); redraw();
+      };
+
+      // bulk
+      els.clearCompleted.addEventListener('click', () => { items = items.filter(i => !i.done); saveLocal(items); redraw(); });
+      els.deleteList.addEventListener('click', () => { if (confirm('Delete ALL items?')) { items = []; saveLocal(items); redraw(); }});
+
+      redraw();
+    }
+  </script>
+
+  <!-- Firestore Security Rules (copy into Firebase console > Firestore > Rules)
+
+  rules_version = '2';
+  service cloud.firestore {
+    match /databases/{database}/documents {
+      match /lists/{listId}/items/{itemId} {
+        allow read, write: if request.time < timestamp.date(2099, 1, 1);
+        // For a private-but-shared list, you can tighten this by requiring a shared token in headers
+        // or migrating to Firebase Auth (anonymous) and checking request.auth!=null.
+      }
+    }
+  }
+
+  -->
+</body>
+</html>
